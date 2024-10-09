@@ -24,7 +24,9 @@ class ExecuteProcessBloc
   }
 
   final OptimizationPathRepository _optimizationPathRepository;
-  List<List<ResultPointType>> gridMatrix = [];
+  List<List<ResultPointType>> _gridMatrix = [];
+  int _totalProcessedPoints = 0;
+  int _totalPointsToProcess = 0;
 
   Future<void> _onFetchTask(
     ExecuteProcessFetchTask event,
@@ -33,20 +35,31 @@ class ExecuteProcessBloc
     if (state.isLoading) return;
     emit(const ExecuteProcessLoading());
     List<ResultDto> results = [];
+    _totalProcessedPoints = 0;
+    _totalPointsToProcess = 0;
+
     try {
-      final response = await _optimizationPathRepository.fetchTasks(
-        event.url,
-      );
+      final response = await _optimizationPathRepository.fetchTasks(event.url);
       if (response.error) {
         emit(ExecuteProcessFailure(result: results, message: response.message));
       } else {
+        _totalPointsToProcess = response.data.fold<int>(
+            0, (sum, path) => sum + (path.field.length * path.field[0].length));
+
         for (PathDto path in response.data) {
-          List<PointDto> pathResult = findShortestPath(path);
+          int pathTotalPoints = path.field.length * path.field[0].length;
+          List<PointDto> pathResult =
+              await findShortestPath(path, onProgress: (progress) async {
+            await Future.delayed(const Duration(milliseconds: 100));
+            _totalProcessedPoints += (progress * pathTotalPoints).toInt();
+            emit(ExecuteProcessLoading(
+                progress: _totalProcessedPoints / _totalPointsToProcess));
+          });
 
           ResultDto resultDto = ResultDto(
             id: path.id,
             path: pathResult.map((e) => '(${e.x},${e.y})').join('->'),
-            resultPoints: gridMatrix,
+            resultPoints: _gridMatrix,
           );
 
           results.add(resultDto);
@@ -66,35 +79,28 @@ class ExecuteProcessBloc
   ) async {
     if (state.isLoading && state.hasResult) return;
     try {
-      emit(ExecuteProcessLoading(
-        result: state.result,
-      ));
+      emit(ExecuteProcessLoading(result: state.result));
       final response =
           await _optimizationPathRepository.sendResults(results: state.result);
       if (response.error) {
         emit(ExecuteProcessFailure(
-          result: state.result,
-          message: response.message,
-        ));
+            result: state.result, message: response.message));
       } else {
         emit(ExecuteProcessSuccessful(
-          result: state.result,
-          isSuccessSend: true,
-        ));
+            result: state.result, isSuccessSend: true));
       }
     } catch (error) {
       emit(ExecuteProcessFailure(
-        result: state.result,
-        message: error.toString(),
-      ));
+          result: state.result, message: error.toString()));
     } finally {
-      emit(ExecuteProcessIdle(
-        result: state.result,
-      ));
+      emit(ExecuteProcessIdle(result: state.result));
     }
   }
 
-  List<PointDto> findShortestPath(PathDto path) {
+  Future<List<PointDto>> findShortestPath(
+    PathDto path, {
+    required Function(double) onProgress,
+  }) async {
     List<PointDto> shortestPath = [];
     Queue<PointDto> queue = Queue();
     Set<String> visited = {};
@@ -102,14 +108,18 @@ class ExecuteProcessBloc
     final start = path.start;
     final end = path.end;
 
-    _initializeGridMatrix(path);
-
+    _initialize_GridMatrix(path);
     queue.add(start);
     visited.add('${start.x},${start.y}');
     parentMap['${start.x},${start.y}'] = null;
 
+    int processedPoints = 0;
+    final totalPointsInPath = path.field.length * path.field[0].length;
+
     while (queue.isNotEmpty) {
       PointDto current = queue.removeFirst();
+      processedPoints++;
+      await onProgress(processedPoints / totalPointsInPath);
 
       if (_isEndPoint(current, end)) {
         shortestPath = _constructShortestPath(current, parentMap);
@@ -132,8 +142,8 @@ class ExecuteProcessBloc
     return [];
   }
 
-  void _initializeGridMatrix(PathDto path) {
-    gridMatrix = List.generate(
+  void _initialize_GridMatrix(PathDto path) {
+    _gridMatrix = List.generate(
       path.field.length,
       (i) => List.generate(
         path.field[0].length,
@@ -144,7 +154,7 @@ class ExecuteProcessBloc
     for (int i = 0; i < path.field.length; i++) {
       for (int j = 0; j < path.field[0].length; j++) {
         if (path.field[i][j] == 'X') {
-          gridMatrix[i][j] = ResultPointType.block;
+          _gridMatrix[i][j] = ResultPointType.block;
         }
       }
     }
@@ -157,7 +167,7 @@ class ExecuteProcessBloc
 
     while (backtrack != null) {
       path.insert(0, backtrack);
-      gridMatrix[backtrack.x][backtrack.y] = ResultPointType.path;
+      _gridMatrix[backtrack.x][backtrack.y] = ResultPointType.path;
       backtrack = parentMap['${backtrack.x},${backtrack.y}'];
     }
 
@@ -178,8 +188,8 @@ class ExecuteProcessBloc
   }
 
   void _markStartAndEnd(PointDto start, PointDto end) {
-    gridMatrix[start.x][start.y] = ResultPointType.start;
-    gridMatrix[end.x][end.y] = ResultPointType.end;
+    _gridMatrix[start.x][start.y] = ResultPointType.start;
+    _gridMatrix[end.x][end.y] = ResultPointType.end;
   }
 
   final List<PointDto> _directions = const [
