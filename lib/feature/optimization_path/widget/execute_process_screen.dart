@@ -28,7 +28,7 @@ class ExecuteProcessScreen extends StatelessWidget {
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text((state as ExecuteProcessFailure).message)));
             }
-            if(state.isRedirection){
+            if (state.isRedirection) {
               Navigator.pushNamed(context, RoutePath.result);
             }
           },
@@ -37,9 +37,11 @@ class ExecuteProcessScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (state.isLoading)
+                if (state.isLoading || state.hasResult)
                   CircularProgressIndicator(
-                    value: (state as ExecuteProcessLoading).progress,
+                    value: state.hasResult && !state.isLoading
+                        ? 100
+                        : (state as ExecuteProcessLoading).progress,
                   ),
                 if (state.hasResult)
                   ElevatedButton(
